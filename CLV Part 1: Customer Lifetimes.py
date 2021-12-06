@@ -1,4 +1,8 @@
 # Databricks notebook source
+# MAGIC %md ## Install required packages
+
+# COMMAND ----------
+
 pip install lifetimes hyperopt mlflow matplotlib pyspark
 
 # COMMAND ----------
