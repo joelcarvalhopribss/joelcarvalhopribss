@@ -39,7 +39,7 @@ import numpy as np
 # identify name of xlsx file (which will change when uploaded)
 xlsx_filename = dbutils.fs.ls('file:///dbfs/FileStore/tmp/joelcarvalho/Online_Retail.xlsx')[0][0]
 
-# schema of the excel spreadsheet data range
+# schema of the excel spreadsheet data range, required to pandas df
 orders_schema = {
   'InvoiceNo':str,
   'StockCode':str,
@@ -92,6 +92,7 @@ orders_pd.head(10)
 orders = spark.createDataFrame(orders_pd)
 
 # present Spark DF as queriable view
+# without this it cannot run queries above the table
 orders.createOrReplaceTempView('orders') 
 
 # COMMAND ----------
@@ -174,7 +175,7 @@ orders.createOrReplaceTempView('orders')
 
 # MAGIC %sql -- the distribution of per-customer transaction counts
 # MAGIC      -- with consideration of same-day transactions as a single transaction 
-# MAGIC 
+# MAGIC      -- ex: user 14 made 5 transations on 6 Dec this query count only one
 # MAGIC SELECT
 # MAGIC   x.Transactions,
 # MAGIC   COUNT(x.*) as Occurances
@@ -211,6 +212,7 @@ orders.createOrReplaceTempView('orders')
 # MAGIC   AVG(
 # MAGIC     DATEDIFF(a.NextInvoiceDate, a.InvoiceDate)
 # MAGIC     ) as AvgDaysBetween
+# MAGIC     -- , CustomerID -- Display CustomerID
 # MAGIC FROM ( -- Purchase Event and Next Purchase Event by Customer
 # MAGIC   SELECT 
 # MAGIC     x.CustomerID,
@@ -233,7 +235,7 @@ orders.createOrReplaceTempView('orders')
 # MAGIC 
 # MAGIC * **Frequency** - the number of dates on which a customer made a purchase subsequent to the date of the customer's first purchase
 # MAGIC * **Age (T)** - the number of time units, *e.g.* days, since the date of a customer's first purchase to the current date (or last date in the dataset)
-# MAGIC * **Recency** - the age of the customer (as previously defined) at the time of their last purchase
+# MAGIC * **Recency** - the age of the customer (as previously defined) at the time of their last purchase/ the days between the last and first transaction dates 
 # MAGIC 
 # MAGIC It's important to note that when calculating metrics such as customer age that we need to consider when our dataset terminates.  Calculating these metrics relative to today's date can lead to erroneous results.  Given this, we will identify the last date in the dataset and define that as *today's date* for all calculations.
 # MAGIC 
@@ -262,7 +264,7 @@ metrics_pd.head(10)
 
 # COMMAND ----------
 
-# MAGIC %md The lifetimes library, like many Python libraries, is single-threaded.  Using this library to derive customer metrics on larger transactional datasets may overwhelm your system or simply take too long to complete. For this reason, let's examine how these metrics can be calculated using the distributed capabilities of Apache Spark.
+# MAGIC %md The lifetimes library, like many Python libraries, is single-threaded.  Using this library to derive customer metrics on larger transactional datasets may overwhelm your system or simply **take too long to complete**. For this reason, let's examine how these metrics can be calculated using the distributed capabilities of Apache Spark.
 # MAGIC 
 # MAGIC As SQL is frequency employed for complex data manipulation, we'll start with a Spark SQL statement.  In this statement, we first assemble each customer's order history consisting of the customer's ID, the date of their first purchase (first_at), the date on which a purchase was observed (transaction_at) and the current date (using the last date in the dataset for this value).  From this history, we can count the number of repeat transaction dates (frequency), the days between the last and first transaction dates (recency), and the days between the current date and first transaction (T) on a per-customer basis:
 
@@ -303,6 +305,7 @@ display(metrics_sql)
 
 # COMMAND ----------
 
+#using pyspark nomenclature
 from pyspark.sql.functions import to_date, datediff, max, min, countDistinct, count, sum, when
 from pyspark.sql.types import *
 
@@ -355,6 +358,10 @@ display(metrics_api)
 # MAGIC %md Let's take a moment to compare the data in these different metrics datasets, just to confirm the results are identical.  Instead of doing this record by record, let's calculate summary statistics across each dataset to verify their consistency:
 # MAGIC 
 # MAGIC NOTE You may notice means and standard deviations vary slightly in the hundred-thousandths and millionths decimal places.  This is a result of slight differences in data types between the pandas and Spark DataFrames but do not affect our results in a meaningful way. 
+# MAGIC 
+# MAGIC **1. Lifetimes**
+# MAGIC **2. Pyspark**
+# MAGIC **3. SQL**
 
 # COMMAND ----------
 
@@ -373,7 +380,7 @@ metrics_api.toPandas().describe()
 
 # COMMAND ----------
 
-# MAGIC %md The metrics we've calculated represent summaries of a time series of data.  To support model validation and avoid overfitting, a common pattern with time series data is to train models on an earlier portion of the time series (known as the *calibration* period) and validate against a later portion of the time series (known as the *holdout* period). In the lifetimes library, the derivation of per customer metrics using calibration and holdout periods is done through a simple method call.  Because our dataset consists of a limited range for data, we will instruct this library method to use the last 90-days of data as the holdout period.  A simple parameter called a widget on the Databricks platform has been implemented to make the configuration of this setting easily changeable:
+# MAGIC %md The metrics we've calculated represent summaries of a time series of data.  To support model validation and avoid overfitting, a common pattern with time series data is to train models on an earlier portion of the time series (known as the *calibration* period) and validate against a later portion of the time series (aka *holdout* period). In the lifetimes library, the derivation of per customer metrics using calibration and holdout periods is done through a simple method call.  Because our dataset consists of a limited range for data, we will instruct this library method to use the last 90-days of data as the holdout period.  A simple parameter called a widget on the Databricks platform has been implemented to make the configuration of this setting easily changeable:
 # MAGIC 
 # MAGIC NOTE To change the number of days in the holdout period, look for the textbox widget by scrolling to the top of your Databricks notebook after running this next cell
 
@@ -382,6 +389,7 @@ metrics_api.toPandas().describe()
 # define a notebook parameter making holdout days configurable (90-days default)
 holdout_days = '90'
 dbutils.widgets.text('holdout days', holdout_days)
+dbutils.widgets.text('user', 'jc')
 
 # COMMAND ----------
 
@@ -518,7 +526,7 @@ metrics_cal_api.toPandas().describe()
 filtered_pd = metrics_pd[metrics_pd['frequency'] > 0]
 filtered = metrics_api.where(metrics_api.frequency > 0)
 
-## remove customers with no repeats in calibration period
+## remove customers with no repeats in calibration period ( time series data is to train models on an earlier portion of the time series)
 filtered_cal_pd = metrics_cal_pd[metrics_cal_pd['frequency_cal'] > 0]
 filtered_cal = metrics_cal_api.where(metrics_cal_api.frequency_cal > 0)
 
@@ -581,16 +589,17 @@ def score_model(actuals, predicted, metric='mse'):
 
 # score the model
 print('MSE: {0}'.format(score_model(frequency_holdout_actual, frequency_holdout_predicted, 'mse')))
+print('RMSE: {0}'.format(score_model(frequency_holdout_actual, frequency_holdout_predicted, 'rmse')))
 
 # COMMAND ----------
 
-# MAGIC %md While the internals of the Pareto/NBD model may be quite complex.  In a nutshell, the model calculates a double integral of two curves, one which describes the frequency of customer purchases within a population and another which describes customer survivorship following a prior purchase event. All of the calculation logic is thankfully hidden behind a simple method call.
+# MAGIC %md While the internals of the **Pareto/NBD model may be quite complex.**  In a nutshell, the model calculates a double integral of two curves, one which describes the frequency of customer purchases within a population and another which describes customer survivorship following a prior purchase event. All of the calculation logic is thankfully hidden behind a simple method call.
 # MAGIC 
 # MAGIC As simple as training a model may be, we have two models that we could use here: the Pareto/NBD model and the BG/NBD model.  The [BG/NBD model](http://brucehardie.com/papers/018/fader_et_al_mksc_05.pdf) simplifies the math involved in calculating customer lifetime and is the model that popularized the BTYD approach.  Both models work off the same customer features and employ the same constraints.  (The primary difference between the two models is that the BG/NBD model maps the survivorship curve to a beta-geometric distribution instead of a Pareto distribution.) To achieve the best fit possible, it is worthwhile to compare the results of both models with our dataset.
 # MAGIC 
 # MAGIC Each model leverages an L2-norm regularization parameter which we've arbitrarily set to 0 in the previous training cycle.  In addition to exploring which model works best, we should consider which value (between 0 and 1) works best for this parameter.  This gives us a pretty broad search space to explore with some hyperparameter tuning.
 # MAGIC 
-# MAGIC To assist us with this, we will make use of [hyperopt](http://hyperopt.github.io/hyperopt/).  Hyperopt allows us to parallelize the training and evaluation of models against a hyperparameter search space.  This can be done leveraging the multiprocessor resources of a single machine or across the broader resources provided by a Spark cluster.  With each model iteration, a loss function is calculated.  Using various optimization algorithms, hyperopt navigates the search space to locate the best available combination of parameter settings to minimize the value returned by the loss function.
+# MAGIC **To assist us with this, we will make use of [hyperopt](http://hyperopt.github.io/hyperopt/).  Hyperopt allows us to parallelize the training and evaluation of models against a hyperparameter search space.  This can be done leveraging the multiprocessor resources of a single machine or across the broader resources provided by a Spark cluster.  With each model iteration, a loss function is calculated.  Using various optimization algorithms, hyperopt navigates the search space to locate the best available combination of parameter settings to minimize the value returned by the loss function.**
 # MAGIC 
 # MAGIC To make use of hyperopt, lets define our search space and re-write our model training and evaluation logic to provide a single function call which will return a loss function measure:
 
@@ -636,7 +645,7 @@ def evaluate_model(params):
 
 # COMMAND ----------
 
-# MAGIC %md Notice that the evaluate_model function retrieves its data from a variable named inputs.  Inputs is defined in the next cell as a [broadcast variable](https://spark.apache.org/docs/latest/rdd-programming-guide.html#broadcast-variables) containing the inputs_pd DataFrame used earlier. As a broadcast variable, a complete stand-alone copy of the dataset used by the model is replicated to each worker in the Spark cluster.  This limits the amount of data that must be sent from the cluster driver to the workers with each hyperopt iteration.  For more information on this and other hyperopt best practices, please refer to [this document](https://docs.databricks.com/applications/machine-learning/automl/hyperopt/hyperopt-best-practices.html).
+# MAGIC %md Notice that the evaluate_model function retrieves its data from a variable named inputs.  Inputs is defined in the next cell as a [broadcast variable](https://spark.apache.org/docs/latest/rdd-programming-guide.html#broadcast-variables) containing the inputs_pd DataFrame used earlier. As a broadcast variable, a complete stand-alone copy of the dataset **used by the model is replicated to each worker in the Spark cluster.**  This limits the amount of data that must be sent from the cluster driver to the workers with each hyperopt iteration.  For more information on this and other hyperopt best practices, please refer to [this document](https://docs.databricks.com/applications/machine-learning/automl/hyperopt/hyperopt-best-practices.html).
 # MAGIC 
 # MAGIC With everything in place, let's perform our hyperparameter tuning over 100 iterations in order to identify the best model type and L2 settings for our dataset:
 
@@ -704,7 +713,7 @@ model.fit(input_pd['frequency_cal'], input_pd['recency_cal'], input_pd['T_cal'])
 
 # MAGIC %md ###Step 5: Evaluate the Model
 # MAGIC 
-# MAGIC Using a method defined in the last section of this notebook, we can calculate the MSE for our newly trained model:
+# MAGIC Using a method defined in the last section of this notebook, we can calculate the errors for our newly trained model:
 
 # COMMAND ----------
 
@@ -742,7 +751,7 @@ display()
 
 # MAGIC %md What we see here is that a higher number of purchases in the calibration period predicts a higher average number of purchases in the holdout period but the actual values diverge sharply from model predictions when we consider customers with a large number of purchases (>60) in the calibration period.  Thinking back to the charts in the data exploration section of this notebook, you might recall that there are very few customers with such a large number of purchases so that this divergence may be a result of a very limited number of instances at the higher end of the frequency range. More data may bring the predicted and actuals back together at this higher end of the curve.  If this divergence persists, it may indicate a range of customer engagement frequency above which we cannot make reliable predictions.
 # MAGIC 
-# MAGIC Using the same method call, we can visualize time since last purchase relative to the average number of purchases in the holdout period. This visualization illustrates that as time since the last purchase increases, the number of purchases in the holdout period decreases.  In otherwords, those customers we haven't seen in a while aren't likely coming back anytime soon:
+# MAGIC Using the same method call, we can visualize time since last purchase relative to the average number of purchases in the holdout(validation) period. This visualization illustrates that as time since the last purchase increases, the number of purchases in the holdout period decreases.  In otherwords, **those customers we haven't seen in a while aren't likely coming back anytime soon:**
 # MAGIC 
 # MAGIC NOTE As before, we will hide the code in the following cells to focus on the visualizations.  Use **Show code** to see the associated Python logic.
 
@@ -841,7 +850,7 @@ display()
 
 # COMMAND ----------
 
-# MAGIC %md In addition to predicting the probability a customer is still alive, we can calculate the number of purchases expected from a customer over a given future time interval, such as over the next 30-days:
+# MAGIC %md In addition to predicting the probability a customer is still alive, **we can calculate the number of purchases expected from a customer over a given future time interval, such as over the next 30-days:**
 
 # COMMAND ----------
 
@@ -933,11 +942,20 @@ class _lifetimesModelWrapper(mlflow.pyfunc.PythonModel):
 
 # COMMAND ----------
 
+from mlflow.models.signature import ModelSignature
+from mlflow.types.schema import Schema, ColSpec
+
+# Signature schema 
+input_schema = Schema([
+  ColSpec("double", "sepal length (cm)"),
+])
+output_schema = Schema([ColSpec("long")])
+signature = ModelSignature(inputs=input_schema, outputs=output_schema)
+
 # add lifetimes to conda environment info
 conda_env = mlflow.pyfunc.get_default_conda_env()
-#conda_env['dependencies'][1]['pip'] += ['lifetimes==0.10.1'] # version should match version installed at top of this notebook
 
-mlflow.set_experiment("/Users/joel.carvalho@primaverabss.com/CLV for Export/CLV Part 1: Customer Lifetimes")
+mlflow.set_experiment("/Repos/joel.carvalho@primaverabss.com/mlflow_connect/notebooks/CLV Part 1: Customer Lifetimes")
 metrics = {"rmse": rmse, "mae": mae, "mse": mse, "frequency": frequency, "recency": recency, "T": T, "t": t} # The value must always be a number
 params = {"holdout_days": holdout_days} # The key and value are both strings
 metrics_txt = "rmse, mae, mse, frequency, recency, T, t"
@@ -954,7 +972,8 @@ with mlflow.start_run(run_name='clv1') as run:
   mlflow.pyfunc.log_model(
     'processing_clv_model', 
     python_model=_lifetimesModelWrapper(model), 
-    conda_env=conda_env
+    conda_env=conda_env,
+    signature=signature
     )
 
 # COMMAND ----------
@@ -1005,7 +1024,7 @@ display(
 
 # COMMAND ----------
 
-# MAGIC %sql -- predict probabiliies customer is alive and will return in 15, 30 & 45 days
+# MAGIC %sql -- predict probabilities customer is alive and will return in 15, 30 & 45 days
 # MAGIC 
 # MAGIC SELECT
 # MAGIC   x.CustomerID,
@@ -1074,3 +1093,26 @@ for version in versions:
 # Delete a registered model along with all its versions
 client.delete_registered_model(name="sk-learn-random-forest-reg-model")
 '''
+
+# COMMAND ----------
+
+# MAGIC %md ## Load model and eject new dataset
+
+# COMMAND ----------
+
+import mlflow
+import pandas as pd
+
+# Load the model from the model registry and score
+model_uri = f"models:/CLV Model/1"
+loaded_model = mlflow.pyfunc.load_model(model_uri)
+
+# Frequency - the number of dates on which a customer made a purchase subsequent to the date of the customer's first purchase
+# Age (T) - the number of time units, e.g. days, since the date of a customer's first purchase to the current date (or last date in the dataset)
+# Recency - the age of the customer (as previously defined) at the time of their last purchase/ the days between the last and first transaction dates
+frequency = 1
+T = 365
+recency = 365
+
+content = loaded_model.predict(pd.DataFrame([[frequency, recency, T]]))
+print(content)
