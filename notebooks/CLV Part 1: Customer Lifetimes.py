@@ -944,16 +944,25 @@ class _lifetimesModelWrapper(mlflow.pyfunc.PythonModel):
 
 from mlflow.models.signature import ModelSignature
 from mlflow.types.schema import Schema, ColSpec
+from mlflow.utils.environment import _mlflow_conda_env
+import lifetimes
+import cloudpickle
 
 # Signature schema 
 input_schema = Schema([
-  ColSpec("double", "sepal length (cm)"),
+  ColSpec("double", "frequency"),
+  ColSpec("double", "recency"),
+  ColSpec("double", "T"),
 ])
-output_schema = Schema([ColSpec("long")])
+output_schema = Schema([ColSpec("double", "alive"), ColSpec("double", "purch_15day"), ColSpec("double", "purch_30day"), ColSpec("double", "purch_45day")])
 signature = ModelSignature(inputs=input_schema, outputs=output_schema)
 
-# add lifetimes to conda environment info
-conda_env = mlflow.pyfunc.get_default_conda_env()
+# add lifetimes and cloudpickle to conda environment info
+conda_env =  _mlflow_conda_env(
+        additional_conda_deps=None,
+        additional_pip_deps=["lifetimes=={}".format(lifetimes.__version__), "cloudpickle=={}".format(cloudpickle.__version__)],
+        additional_conda_channels=None,
+    )
 
 mlflow.set_experiment("/Repos/joel.carvalho@primaverabss.com/mlflow_connect/notebooks/CLV Part 1: Customer Lifetimes")
 metrics = {"rmse": rmse, "mae": mae, "mse": mse, "frequency": frequency, "recency": recency, "T": T, "t": t} # The value must always be a number
