@@ -959,6 +959,7 @@ signature = ModelSignature(inputs=input_schema, outputs=output_schema)
 
 # add lifetimes and cloudpickle to conda environment info
 conda_env =  _mlflow_conda_env(
+        #path="/dbfs/FileStore/tmp/joelcarvalho/conda.yaml",
         additional_conda_deps=None,
         additional_pip_deps=["lifetimes=={}".format(lifetimes.__version__), "cloudpickle=={}".format(cloudpickle.__version__)],
         additional_conda_channels=None,
@@ -975,6 +976,10 @@ with open("metrics.txt", 'w') as f:
 # save model run to mlflow
 #experiment_id = mlflow.create_experiment("/Users/joel.carvalho@primaverabss.com/CLV Experiment")
 with mlflow.start_run(run_name='clv1') as run:
+  
+  run_id = run.info.run_uuid 
+  exp_id = run.info.experiment_id
+  
   mlflow.log_params(params)
   mlflow.log_metrics(metrics)
   mlflow.log_artifact("metrics.txt")
@@ -1054,9 +1059,17 @@ display(
 
 # COMMAND ----------
 
+# MAGIC %md ## Extra experiments (by: Joel)
+
+# COMMAND ----------
+
 # Search all runs in experiment_id, search number in the experiments section
 df = mlflow.search_runs(['2303761153014962'], order_by=["metrics.mse DESC"])
 print(df)
+
+# COMMAND ----------
+
+# MAGIC %md ## Register Model
 
 # COMMAND ----------
 
@@ -1069,6 +1082,10 @@ model_version = mlflow.register_model(f"runs:/{run_id}/processing_clv_model", mo
 # Need install!!! Registering the model takes a few seconds, so add a small delay
 #time.sleep(15)
 '''
+
+# COMMAND ----------
+
+# MAGIC %md ## Model Transitions
 
 # COMMAND ----------
 
@@ -1092,6 +1109,10 @@ client.transition_model_version_stage(
 
 # COMMAND ----------
 
+# MAGIC %md ## Delete Model
+
+# COMMAND ----------
+
 '''
 # Delete versions 1,2, and 3 of the model
 client = MlflowClient()
@@ -1101,6 +1122,23 @@ for version in versions:
 
 # Delete a registered model along with all its versions
 client.delete_registered_model(name="sk-learn-random-forest-reg-model")
+'''
+
+# COMMAND ----------
+
+# MAGIC %md ## Add a description to the new model version
+
+# COMMAND ----------
+
+'''
+from mlflow.tracking.client import MlflowClient
+
+client = MlflowClient()
+client.update_model_version(
+  name=model_name,
+  version=model_version,
+  description="This is the best model version is a random forest that was trained in scikit-learn."
+)
 '''
 
 # COMMAND ----------
